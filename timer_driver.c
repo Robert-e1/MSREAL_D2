@@ -159,7 +159,8 @@ static irqreturn_t xilaxitimer_isr(int irq,void*dev_id)
 	    int_flag = 1;
 	  }
 	
-	// Clear Interrupt - in cascade mode only Timer0 interrupts occur! 
+	// Clear Interrupt - in cascade mode only Timer0 interrupts occur!
+	printk(KERN_INFO "INTERRUPT OCCURED \n\n\n");
 	//data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 	iowrite32(data0 | XIL_AXI_TIMER_CSR_INT_OCCURED_MASK,
@@ -169,8 +170,13 @@ static irqreturn_t xilaxitimer_isr(int irq,void*dev_id)
 	if (int_flag)
 	{
 		printk(KERN_NOTICE "xilaxitimer_isr: Times up. Disabling timer\n");
+		data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 		data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-		iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK), tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+		iowrite32(data1 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
+			  tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+		iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
+			  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+		
 		int_flag = 0;
 	}
 
@@ -188,9 +194,11 @@ static void setup_and_start_timer(unsigned long milliseconds)
 	unsigned int data0 = 0;
 	unsigned int data1 = 0;
 	timer_load = milliseconds * 100000;
-	timer0_load =(unsigned int)(timer_load);
+	timer0_load =(unsigned int)(timer_load);  
 	timer1_load =(unsigned int)(timer_load >> 32);
-
+	
+	printk(KERN_INFO "Gornjih 32 imaju vrednost: %d \n ",timer1_load);
+	printk(KERN_INFO "Donjih 32 imaju vrednost: %d \n",timer0_load);
 	// Disable timer/counter while configuration is in progress
 	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
@@ -199,19 +207,13 @@ static void setup_and_start_timer(unsigned long milliseconds)
 	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
 		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK),
+		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+
 	// Set initial value in load registers (TLR0 and TLR1)
 	iowrite32(timer1_load, tp->base_addr + XIL_AXI_TIMER_TLR1_OFFSET);
 	iowrite32(timer0_load, tp->base_addr + XIL_AXI_TIMER_TLR0_OFFSET);
-
-	// Set CASC bit in TCSR0
-	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-        iowrite32(data0 | XIL_AXI_TIMER_CSR_CASC_MASK,
-		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-
-	//set downcounting
-	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-	iowrite32(data0 | XIL_AXI_TIMER_CSR_DOWN_COUNT_MASK,
-		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 	
 	// Load initial value into counter from load register
 	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
@@ -228,8 +230,10 @@ static void setup_and_start_timer(unsigned long milliseconds)
 	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_LOAD_MASK),
 		        tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
-	// Enable interrupts and autoreload, rest should be zero (in CASC mode only write TCSR0)
-	iowrite32(XIL_AXI_TIMER_CSR_ENABLE_INT_MASK ,
+	// Enable interrupts,cascade mode and downcounting, rest should be zero (in CASC mode only write TCSR0)
+	iowrite32(XIL_AXI_TIMER_CSR_ENABLE_INT_MASK |
+		  XIL_AXI_TIMER_CSR_CASC_MASK |
+		  XIL_AXI_TIMER_CSR_DOWN_COUNT_MASK ,
 			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
 	// Start Timer bz setting enable signal (in CASC mode only write TCSR0)
@@ -380,7 +384,12 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 		}
 		else
 		{
-	  millis = secs*1000 + mins*6000 + hours*3600000 + days*86400000;
+		  millis = 0;
+		  millis += secs*1000;
+		  millis += mins*60*1000;
+		  millis += hours*60*60*1000;
+		  millis += days*24*60*60*1000;
+		 
 		  printk(KERN_INFO "xilaxitimer_write: Starting timer for %d:%d:%d:%d  \n",days,hours,mins,secs);
 	  run_flag = 1;     
 	  setup_and_start_timer(millis);
