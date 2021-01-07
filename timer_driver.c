@@ -61,17 +61,18 @@ static struct device *my_device;
 static struct cdev *my_cdev;
 static struct timer_info *tp = NULL;
 
-static int int_flag = 0;
-unsigned long millis = 0;
+u64 millis = 0;
 char command[6];  //za unosenje komandi "start" i "stop"
 char *start_command = "start";
 char *stop_command = "stop";
+int run_flag = 0; //if == 1, timer is running,else timer halts
 
-int timer_start(void);
-int timer_halt(void);
+u64 read_rem_time(void);
+static void timer_start(void);
+static void timer_halt(void);
 
 static irqreturn_t xilaxitimer_isr(int irq,void*dev_id);
-static void setup_and_start_timer(unsigned long milliseconds);
+static void setup_and_start_timer(u64 milliseconds);
 static int timer_probe(struct platform_device *pdev);
 static int timer_remove(struct platform_device *pdev);
 int timer_open(struct inode *pinode, struct file *pfile);
@@ -109,8 +110,32 @@ static struct platform_driver timer_driver = {
 MODULE_DEVICE_TABLE(of, timer_of_match);
 
 //**************************************************
+//READ REMAINING TIME
+u64 read_rem_time()
+{
+  u64 rem_time = 0;
+  u32 data1 = 0;
+  u32 data0 = 0;
+  u32 data1_check = 0;
+	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR1_OFFSET);
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR0_OFFSET);
+
+	data1_check = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR1_OFFSET);
+	while(data1_check != data1)//read upper 32 bits of cascaded timer again to check if it changed, if yes, read lower 32 bits again, if no, 64-bit counter value is correct
+	  {
+	    data1 = data1_check;
+	    data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR0_OFFSET);
+	    data1_check = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR1_OFFSET);
+	  }
+	rem_time = data1;
+	rem_time <<= 32;
+	rem_time += data0;
+	
+	return rem_time;
+}
+//**************************************************
 //TIMER HALT AND START USING COMMANDS
-int timer_halt()
+static void timer_halt()
 {
   unsigned int data0 = 0;
   unsigned int data1 = 0;
@@ -121,17 +146,17 @@ int timer_halt()
 	    tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
   iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
 	    tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-  return 0;
+
 }
 
-int timer_start()
+static void timer_start()
 {
   unsigned int data0 = 0;
   
   data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
   iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
 	    tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-  return 0;
+ 
 }
 //***************************************************
 // INTERRUPT SERVICE ROUTINE (HANDLER)
@@ -153,22 +178,14 @@ static irqreturn_t xilaxitimer_isr(int irq,void*dev_id)
 	    data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR0_OFFSET);
 	    data1_check = ioread32(tp->base_addr + XIL_AXI_TIMER_TCR1_OFFSET);
 	  }
-        //if 64 bit timer/counter value is zero, set int_flag (to stop timer)
-	if(data1 == 0 && data0 == 0)
-	  {
-	    int_flag = 1;
-	  }
-	
+	printk(KERN_INFO "Desio se prekid \n");
+        
 	// Clear Interrupt - in cascade mode only Timer0 interrupts occur!
-	printk(KERN_INFO "INTERRUPT OCCURED \n\n\n");
-	//data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 	iowrite32(data0 | XIL_AXI_TIMER_CSR_INT_OCCURED_MASK,
 			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 	
-	// Disable Timer when done counting (when int_flag == 1)
-	if (int_flag)
-	{
+	// Disable Timer when done counting
 		printk(KERN_NOTICE "xilaxitimer_isr: Times up. Disabling timer\n");
 		data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 		data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
@@ -176,29 +193,27 @@ static irqreturn_t xilaxitimer_isr(int irq,void*dev_id)
 			  tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 		iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
 			  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-		
-		int_flag = 0;
-	}
 
 	return IRQ_HANDLED;
 }
 //***************************************************
 //HELPER FUNCTION THAT RESETS AND STARTS TIMER WITH PERIOD IN MILISECONDS
 
-static void setup_and_start_timer(unsigned long milliseconds)
+static void setup_and_start_timer(u64 milliseconds)
 {
 	// Disable Timer Counter
-	unsigned int timer0_load;
-	unsigned int timer1_load;
-	unsigned long timer_load;
-	unsigned int data0 = 0;
-	unsigned int data1 = 0;
-	timer_load = milliseconds * 100000;
-	timer0_load =(unsigned int)(timer_load);  
+	u32 timer0_load;
+	u32 timer1_load;
+	u64 timer_load;
+	u32 data0 = 0;
+	u32 data1 = 0;
+	timer_load = milliseconds * 100000;// - desi se overflow
+	timer0_load =(unsigned int)(timer_load);
 	timer1_load =(unsigned int)(timer_load >> 32);
 	
-	printk(KERN_INFO "Gornjih 32 imaju vrednost: %d \n ",timer1_load);
-	printk(KERN_INFO "Donjih 32 imaju vrednost: %d \n",timer0_load);
+	printk(KERN_INFO "64bitna vrednost: %llu \n", timer_load);
+	printk(KERN_INFO "Gornjih 32 imaju vrednost: %u \n ",timer1_load);
+	printk(KERN_INFO "Donjih 32 imaju vrednost: %u \n",timer0_load);
 	// Disable timer/counter while configuration is in progress
 	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
 	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
@@ -351,24 +366,40 @@ int timer_close(struct inode *pinode, struct file *pfile)
 ssize_t timer_read(struct file *pfile, char __user *buffer, size_t length, loff_t *offset) 
 {
   
-  //int ret;
-  //char buff[BUFF_SIZE];
-  //long int len = 0;
- 
-	//printk(KERN_INFO "Succesfully read timer\n");
-	return 0;
+  int ret;
+  char buff[BUFF_SIZE];
+  long int len = 0;
+  u64 rem = 0;
+  u64 days = 0;
+  u64 hours = 0;
+  u64 mins = 0;
+  u64 secs = 0;
+  
+  rem = read_rem_time();
+
+  len = scnprintf(buff, BUFF_SIZE, "%llu \n", rem);
+  ret = copy_to_user(buffer, buff, len);
+
+  if(ret)
+    return -EFAULT;
+      
+  printk(KERN_INFO "Remaining time is: %llu \n",rem);
+printk(KERN_INFO "Remaining days: %llu \n",days);  
+printk(KERN_INFO "Remaining hours: %llu \n",hours);  
+printk(KERN_INFO "Remaining mins: %llu \n",mins);  
+printk(KERN_INFO "Remaining secs: %llu \n",secs);  
+
+return 0;
 }
 
 ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length, loff_t *offset) 
 {
 	char buff[BUFF_SIZE];
-	//unsigned long millis = 0;
 	unsigned int days = 0;
 	unsigned int hours = 0;
 	unsigned int mins = 0;
 	unsigned int secs = 0;
 	unsigned int ret = 0;
-	int run_flag = 0; //if == 1, timer is running,else timer is stopped
 	int i = 0;
 	ret = copy_from_user(buff, buffer, length);
 	if(ret)
@@ -376,9 +407,9 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 	buff[length] = '\0';
 
 	ret = sscanf(buff,"%d:%d:%d:%d",&days,&hours,&mins,&secs);
-	if(ret == 4)//4 parameters parsed in sscanf
+	if(ret == 4 )//4 parameters parsed in sscanf
 	{
-		if (days > 2135000 )
+	  if (days > 2135000 )
 		{
 			printk(KERN_WARNING "xilaxitimer_write: Maximum time exceeded, enter something less \n");
 		}
@@ -389,10 +420,17 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 		  millis += mins*60*1000;
 		  millis += hours*60*60*1000;
 		  millis += days*24*60*60*1000;
-		 
-		  printk(KERN_INFO "xilaxitimer_write: Starting timer for %d:%d:%d:%d  \n",days,hours,mins,secs);
-	  run_flag = 1;     
+		  if(millis == 0)
+		    {
+		      printk(KERN_INFO "Cannot start timer for 0 seconds! \n");
+		    }
+		  else
+		    {
+	  printk(KERN_INFO "xilaxitimer_write: Starting timer for %d:%d:%d:%d  \n",days,hours,mins,secs);
+	  run_flag = 1;
+	  printk(KERN_INFO "run flag = %d", run_flag);
 	  setup_and_start_timer(millis);
+		    }
 		}
 
 	}
@@ -403,25 +441,33 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 	      command[i] = buff[i];
 	    }
 	  command[length] = '\0';
-	  if(!strncmp(command,start_command,strlen(start_command)))
+	  if(!strncmp(command,start_command,strlen(start_command)))//START
 	    {
-	      if(run_flag == 0 && millis != 0)
+	      if(run_flag == 0 && millis > 0)
 		{
 		  run_flag = 1;
+		  	  printk(KERN_INFO "run flag = %d", run_flag);
+		  printk(KERN_INFO "Timer running! \n");
 		  timer_start();
 		}
+	      else
+		printk(KERN_INFO "Timer already running! \n");
 	    }
-	  else if(!strncmp(command,stop_command,strlen(stop_command)))
+	  else if(!strncmp(command,stop_command,strlen(stop_command)))//STOP
 	    {
 	      if(run_flag == 1)
 		{
 		  run_flag = 0;
+		  	  printk(KERN_INFO "run flag = %d", run_flag);
+		  printk(KERN_INFO "Timer halting! \n");
 		  timer_halt();
 		}
+	      else
+		printk("Timer already halting! \n");
 	    }
 	  else
 	    {
-	      printk(KERN_WARNING "Wrong command format");
+	      printk(KERN_WARNING "Wrong command format \n");
 	    }
 	}
 	return length;
