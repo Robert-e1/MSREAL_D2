@@ -10,6 +10,8 @@
 #include <linux/errno.h>
 #include <linux/device.h>
 
+#include <asm/div64.h>
+
 #include <linux/io.h> //iowrite ioread
 #include <linux/slab.h>//kmalloc kfree
 #include <linux/platform_device.h>//platform driver
@@ -137,8 +139,8 @@ u64 read_rem_time()
 //TIMER HALT AND START USING COMMANDS
 static void timer_halt()
 {
-  unsigned int data0 = 0;
-  unsigned int data1 = 0;
+  u32 data0 = 0;
+  u32 data1 = 0;
 
   data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET );
   data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET );
@@ -151,7 +153,7 @@ static void timer_halt()
 
 static void timer_start()
 {
-  unsigned int data0 = 0;
+  u32 data0 = 0;
   
   data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
   iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
@@ -374,12 +376,22 @@ ssize_t timer_read(struct file *pfile, char __user *buffer, size_t length, loff_
   u64 hours = 0;
   u64 mins = 0;
   u64 secs = 0;
+  //u64 tmp = 100000*1000*60*60*24;
   
   rem = read_rem_time();
 
-  len = scnprintf(buff, BUFF_SIZE, "%llu \n", rem);
-  ret = copy_to_user(buffer, buff, len);
+  secs = div_u64(rem, 100000*1000);
+  mins = div_u64(secs, 60);
+  hours = div_u64(mins, 60);
+  days = div_u64(hours, 24);
 
+  hours = hours - ( days * 24 );
+  mins = mins - (hours * 60 ) - (days * 24 * 60);
+  secs = secs - (mins * 60 ) - (hours * 60 * 60) - (days * 24 * 60 * 60);
+
+  len = scnprintf(buff, BUFF_SIZE, "%llu %llu %llu %llu %llu\n",rem,days,hours,mins,secs);
+  ret = copy_to_user(buffer,buff,len);
+  
   if(ret)
     return -EFAULT;
       
