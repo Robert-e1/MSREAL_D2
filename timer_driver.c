@@ -74,7 +74,7 @@ static void timer_start(void);
 static void timer_halt(void);
 
 static irqreturn_t xilaxitimer_isr(int irq,void*dev_id);
-static void setup_and_start_timer(u64 milliseconds);
+static void setup_timer(u64 milliseconds);
 static int timer_probe(struct platform_device *pdev);
 static int timer_remove(struct platform_device *pdev);
 int timer_open(struct inode *pinode, struct file *pfile);
@@ -239,7 +239,7 @@ static irqreturn_t xilaxitimer_isr(int irq,void*dev_id)
 //***************************************************
 //HELPER FUNCTION THAT RESETS AND STARTS TIMER WITH PERIOD IN MILISECONDS
 
-static void setup_and_start_timer(u64 milliseconds)
+static void setup_timer(u64 milliseconds)
 {
 	// Disable Timer Counter
 	u32 timer0_load;
@@ -292,9 +292,9 @@ static void setup_and_start_timer(u64 milliseconds)
 			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
 	// Start Timer bz setting enable signal (in CASC mode only write TCSR0)
-	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-	iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
-			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	//data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	//iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
+	//		tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
 }
 
@@ -473,9 +473,9 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 		  else
 		    {
 	  printk(KERN_INFO "xilaxitimer_write: Starting timer for %d:%d:%d:%d  \n",days,hours,mins,secs);
-	  run_flag = 1;
+	  run_flag = 0;
 	  printk(KERN_INFO "run flag = %d", run_flag);
-	  setup_and_start_timer(millis);
+	  setup_timer(millis);
 		    }
 		}
 
