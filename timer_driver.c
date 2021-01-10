@@ -141,24 +141,62 @@ static void timer_halt()
 {
   u32 data0 = 0;
   u32 data1 = 0;
+  u32 timer1_load = 0;
+  u32 timer0_load = 0;
+  millis = read_rem_time();
+  timer0_load = (unsigned int)(millis);
+  timer1_load = (unsigned int)(millis >> 32);
+  
+        //DISABLE TIMER
+	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data1 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
+		  tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
+		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
-  data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET );
-  data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET );
-  iowrite32(data1 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
-	    tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
-  iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_TMR_MASK),
-	    tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK),
+		  tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
 
+	// Set initial value in load registers (TLR0 and TLR1)
+	iowrite32(timer1_load, tp->base_addr + XIL_AXI_TIMER_TLR1_OFFSET);
+	iowrite32(timer0_load, tp->base_addr + XIL_AXI_TIMER_TLR0_OFFSET);
+	
+	// Load initial value into counter from load register
+	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data1 | XIL_AXI_TIMER_CSR_LOAD_MASK,
+			tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	iowrite32(data0 | XIL_AXI_TIMER_CSR_LOAD_MASK,
+		        tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+
+	data1 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data1 & ~(XIL_AXI_TIMER_CSR_LOAD_MASK),
+			tp->base_addr + XIL_AXI_TIMER_TCSR1_OFFSET);
+	iowrite32(data0 & ~(XIL_AXI_TIMER_CSR_LOAD_MASK),
+		        tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+
+	// Enable interrupts,cascade mode and downcounting, rest should be zero (in CASC mode only write TCSR0)
+	iowrite32(XIL_AXI_TIMER_CSR_ENABLE_INT_MASK |
+		  XIL_AXI_TIMER_CSR_CASC_MASK |
+		  XIL_AXI_TIMER_CSR_DOWN_COUNT_MASK ,
+			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+
+  
+  printk(KERN_INFO "Timer halting ! \n");
 }
 
 static void timer_start()
 {
   u32 data0 = 0;
-  
-  data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
-  iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
-	    tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
- 
+
+  	// Start Timer bz setting enable signal (in CASC mode only write TCSR0)
+	data0 = ioread32(tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+	iowrite32(data0 | XIL_AXI_TIMER_CSR_ENABLE_ALL_MASK,
+			tp->base_addr + XIL_AXI_TIMER_TCSR0_OFFSET);
+
 }
 //***************************************************
 // INTERRUPT SERVICE ROUTINE (HANDLER)
@@ -209,7 +247,7 @@ static void setup_and_start_timer(u64 milliseconds)
 	u64 timer_load;
 	u32 data0 = 0;
 	u32 data1 = 0;
-	timer_load = milliseconds * 100000;// - desi se overflow
+	timer_load = milliseconds * 100000;
 	timer0_load =(unsigned int)(timer_load);
 	timer1_load =(unsigned int)(timer_load >> 32);
 	
@@ -396,11 +434,7 @@ ssize_t timer_read(struct file *pfile, char __user *buffer, size_t length, loff_
     return -EFAULT;
       
   printk(KERN_INFO "Remaining time is: %llu \n",rem);
-printk(KERN_INFO "Remaining days: %llu \n",days);  
-printk(KERN_INFO "Remaining hours: %llu \n",hours);  
-printk(KERN_INFO "Remaining mins: %llu \n",mins);  
-printk(KERN_INFO "Remaining secs: %llu \n",secs);  
-
+  printk(KERN_INFO "Remaining time: %llu:%llu:%llu:%llu \n", days, hours, mins, secs);
 return 0;
 }
 
@@ -471,8 +505,8 @@ ssize_t timer_write(struct file *pfile, const char __user *buffer, size_t length
 		{
 		  run_flag = 0;
 		  	  printk(KERN_INFO "run flag = %d", run_flag);
-		  printk(KERN_INFO "Timer halting! \n");
-		  timer_halt();
+			  //printk(KERN_INFO "Timer halting! \n");
+			  timer_halt();
 		}
 	      else
 		printk("Timer already halting! \n");
